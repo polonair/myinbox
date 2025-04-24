@@ -68,13 +68,13 @@ namespace MyInbox
             return transaction;
         }
 
-        internal static void CreateWithFile(string path)
+        internal static void CreateWithFile(string path, string id = null)
         {
             new TimeTransaction()
             {
                 FileName = path,
                 Start = DateTime.Now,
-                Task = ""
+                Task = string.IsNullOrEmpty(id) ? "" : id,
             }.Flush();
         }
 
@@ -122,7 +122,7 @@ namespace MyInbox
         }
         public void Start()
         {
-            string path = $"g:/My Drive/sync/MyInbox/ttx/ttx-{DateTime.Now:yyyyMMddhhmmss}.md";
+            string path = $"g:/My Drive/sync/MyInbox/ttx/ttx-{DateTime.Now:yyyyMMddHHmmss}.md";
             TimeTransaction.CreateWithFile(path);
         }
         public async Task StartAsync(CancellationToken cancelationToken)
@@ -131,6 +131,12 @@ namespace MyInbox
             {
                 Thread.Sleep(1000);
             }
+        }
+
+        internal void Start(string id)
+        {
+            string path = $"g:/My Drive/sync/MyInbox/ttx/ttx-{DateTime.Now:yyyyMMddHHmmss}.md";
+            TimeTransaction.CreateWithFile(path, id);
         }
     }
 }
