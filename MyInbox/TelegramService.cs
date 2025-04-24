@@ -54,6 +54,27 @@ namespace MyInbox
                 });
                 response.EnsureSuccessStatusCode();
             }
+            else if (update.message.text.StartsWith("/inbox"))
+            {
+                var rawFileName = $"{DateTime.Now:yyyyMMddhhmmss}.md";
+                var realtiveFileName = $"inbox/{rawFileName}";
+                var absoluteFileName = $"g:/My Drive/sync/MyInbox/{realtiveFileName}";
+                File.WriteAllText(absoluteFileName, update.message.text.Substring(6));
+
+                var append = $"* ![[{realtiveFileName}]]\n";
+
+                rawFileName = $"INBOX.md";
+                realtiveFileName = $"{rawFileName}";
+                absoluteFileName = $"g:/My Drive/sync/MyInbox/{realtiveFileName}";
+                File.AppendAllText(absoluteFileName, append);
+
+                var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
+                {
+                    chat_id = update.message.chat.id,
+                    text = "Заметка сохранена в INBOX",
+                });
+                response.EnsureSuccessStatusCode();
+            }
             else if (update.message.text.StartsWith("/begin"))
             {
                 _tracker.Start();
