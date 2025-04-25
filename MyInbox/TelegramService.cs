@@ -1,4 +1,5 @@
-﻿using System.Net.Http.Json;
+﻿using System.Data;
+using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -103,7 +104,7 @@ namespace MyInbox
 
         private async Task HandleUpdateAsync(TelegramUpdate update, CancellationToken ct)
         {
-            if (update == null) return;
+            if (update == null || update.message == null || update.message.text == null) return;
 
             if (update.message.text.StartsWith("/start"))
             {
@@ -168,7 +169,7 @@ namespace MyInbox
                         var append = $"* ![[{realtiveFileName}]]\n";
 
                         var path = Path.GetDirectoryName(t.FileName);
-                        var p = Path.Combine(path, t.Id, "ACTIVITY.md");
+                        var p = Path.Combine(path, $"{t.Id}-ACTIVITY.md");
 
                         p.EnsureDirectoryExists();
                         File.AppendAllText(p, append);
@@ -176,7 +177,7 @@ namespace MyInbox
                         var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
                         {
                             chat_id = update.message.chat.id,
-                            text = $"Заметка сохранена в {t.Id}/ACTIVITY",
+                            text = $"Заметка сохранена в {t.Id}-ACTIVITY",
                         });
                         response.EnsureSuccessStatusCode();
                     }
@@ -188,7 +189,7 @@ namespace MyInbox
                 {
 
                     var record = _tracker.CurrentTimeTransaction;
-                    record.Stop = DateTime.Now;
+                    record.StopNow();
 
                     var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
                     {
@@ -233,7 +234,7 @@ namespace MyInbox
                 if (_tracker.IsTracking)
                 {
                     var record = _tracker.CurrentTimeTransaction;
-                    record.Stop = DateTime.Now;
+                    record.StopNow();
 
                     var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
                     {
@@ -257,6 +258,7 @@ namespace MyInbox
                         text = "Таймер остановлен",
                     });
                     response.EnsureSuccessStatusCode();
+                    _tracker.UpdateTimeSheets();
                 }
                 else
                 {
@@ -302,8 +304,8 @@ namespace MyInbox
 
                     var rel = Path.GetDirectoryName(record.TaskPath);
 
-                    rawFileName = $"ACTIVITY.md";
-                    realtiveFileName = $"{rel}/{record.Task}/{rawFileName}";
+                    rawFileName = $"{record.Task}-ACTIVITY.md";
+                    realtiveFileName = $"{rel}/{rawFileName}";
                     absoluteFileName = $"g:/My Drive/sync/MyInbox/{realtiveFileName}";
                     absoluteFileName.EnsureDirectoryExists();
                     File.AppendAllText(absoluteFileName, append);
@@ -311,7 +313,7 @@ namespace MyInbox
                     var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
                     {
                         chat_id = update.message.chat.id,
-                        text = $"Заметка сохранена в {record.Task}/ACTIVITY",
+                        text = $"Заметка сохранена в {record.Task}-ACTIVITY",
                     });
                     response.EnsureSuccessStatusCode();
                 }
@@ -337,6 +339,40 @@ namespace MyInbox
         {
             //   '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'
             return str;
+        }
+        public static string ToMarkdown(this DataTable dataTable)
+        {
+            if (dataTable == null || dataTable.Columns.Count == 0)
+                return string.Empty;
+
+            StringBuilder markdownBuilder = new StringBuilder();
+
+            // Построение заголовка таблицы
+            foreach (DataColumn column in dataTable.Columns)
+            {
+                markdownBuilder.Append("| ").Append(column.ColumnName).Append(" ");
+            }
+            markdownBuilder.Append("|\n");
+
+            // Построение разделительной строки
+            foreach (DataColumn column in dataTable.Columns)
+            {
+                markdownBuilder.Append("| ").Append(new string('-', column.ColumnName.Length)).Append(" ");
+            }
+            markdownBuilder.Append("|\n");
+
+            // Построение строк с данными
+            foreach (DataRow row in dataTable.Rows)
+            {
+                foreach (var item in row.ItemArray)
+                {
+                    string value = item?.ToString() ?? string.Empty;
+                    markdownBuilder.Append("| ").Append(value).Append(" ");
+                }
+                markdownBuilder.Append("|\n");
+            }
+
+            return markdownBuilder.ToString();
         }
     }
 }
