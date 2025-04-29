@@ -1,8 +1,10 @@
 ﻿using System.Data;
+using System.Diagnostics.Eventing.Reader;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 namespace MyInbox
 {
@@ -42,7 +44,7 @@ namespace MyInbox
         internal static List<MyTask> GetTasks()
         {
             var result = new List<MyTask>();
-            foreach (var file in Directory.EnumerateFiles("g:/My Drive/sync/MyInbox/", "*.md", SearchOption.AllDirectories))
+            foreach (var file in Directory.EnumerateFiles("g:/Мой диск/sync/MyInbox/", "*.md", SearchOption.AllDirectories))
             {
                 var content = File.ReadAllLines(file);
                 if (content.Length > 1 && content[0].Trim() == "---")
@@ -104,191 +106,94 @@ namespace MyInbox
 
         private async Task HandleUpdateAsync(TelegramUpdate update, CancellationToken ct)
         {
-            if (update == null || update.message == null || update.message.text == null) return;
+            if (update == null) return;
 
-            if (update.message.text.StartsWith("/start"))
+            if (update.callback_query != null)
             {
-                var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
+                int state = 0;
+                string func = "";
+                List<string> args = new();
+                foreach(var c in update.callback_query.data)
                 {
-                    chat_id = update.message.chat.id,
-                    text = "Привет от бота!",
-                });
-                response.EnsureSuccessStatusCode();
-            }
-            else if (update.message.text.StartsWith("/inbox"))
-            {
-                var rawFileName = $"{DateTime.Now:yyyyMMddHHmmss}.md";
-                var realtiveFileName = $"inbox/{rawFileName}";
-                var absoluteFileName = $"g:/My Drive/sync/MyInbox/{realtiveFileName}";
-                File.WriteAllText(absoluteFileName, update.message.text.Substring(6));
-
-                var append = $"* ![[{realtiveFileName}]]\n";
-
-                rawFileName = $"INBOX.md";
-                realtiveFileName = $"{rawFileName}";
-                absoluteFileName = $"g:/My Drive/sync/MyInbox/{realtiveFileName}";
-                File.AppendAllText(absoluteFileName, append);
-
-                var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
-                {
-                    chat_id = update.message.chat.id,
-                    text = "Заметка сохранена в INBOX",
-                });
-                response.EnsureSuccessStatusCode();
-            }
-            else if (update.message.text.StartsWith("/tasks"))
-            {
-                StringBuilder msg = new StringBuilder();
-                List<MyTask> tasks = MyTaskController.GetTasks();
-
-                foreach(var task in tasks)
-                {
-                    msg.Append($"* ({task.Status}) {task.Id}: {task.Title} /begin@{task.Id.Replace('-', '_')} /note@{task.Id.Replace('-', '_')}\n");
-                }
-
-                var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
-                {
-                    chat_id = update.message.chat.id,
-                    text = msg.ToString(),
-                });
-                response.EnsureSuccessStatusCode();
-            }
-            else if (update.message.text.StartsWith("/note@"))
-            {
-                List<MyTask> tasks = MyTaskController.GetTasks();
-
-                foreach (var t in tasks)
-                {
-                    if (t.Id.Replace('-', '_') == update.message.text.Substring(6, update.message.text.IndexOf(' ')-6).Trim())
+                    switch (state)
                     {
-                        var rawFileName = $"{DateTime.Now:yyyyMMddHHmmss}.md";
-                        var realtiveFileName = $"inbox/{rawFileName}";
-                        var absoluteFileName = $"g:/My Drive/sync/MyInbox/{realtiveFileName}";
-                        File.WriteAllText(absoluteFileName, update.message.text.Substring(update.message.text.IndexOf(' ')).Trim());
-
-                        var append = $"* ![[{realtiveFileName}]]\n";
-
-                        var path = Path.GetDirectoryName(t.FileName);
-                        var p = Path.Combine(path, $"{t.Id}-ACTIVITY.md");
-
-                        p.EnsureDirectoryExists();
-                        File.AppendAllText(p, append);
-
-                        var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
-                        {
-                            chat_id = update.message.chat.id,
-                            text = $"Заметка сохранена в {t.Id}-ACTIVITY",
-                        });
-                        response.EnsureSuccessStatusCode();
+                        case 0:
+                            if (char.IsLetter(c) || c == '_') func += c;
+                            else if (c == '(') state++;
+                            else return;
+                            break;
+                        case 1:
+                            if (c == '\'') { args.Add(""); state++; }
+                            else if (c == ')') state = 3;
+                            break;
+                        case 2:
+                            if (c == '\'') state--;
+                            else args[args.Count - 1] = args[args.Count - 1] + c;
+                            break;
+                        default: break;
                     }
                 }
-            }
-            else if (update.message.text.StartsWith("/begin@"))
-            {
-                if (_tracker.IsTracking)
+                if (func == "ttx_set_start")
                 {
-
-                    var record = _tracker.CurrentTimeTransaction;
-                    record.StopNow();
-
-                    var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
+                    if (DateTime.TryParse(args[0], out DateTime newStartValue))
                     {
-                        chat_id = update.message.chat.id,
-                        text =
-                            $"Таймер запущен в {record.Start}\n" +
-                            $"Остановлен в {record.Stop}\n" +
-                            $"Задача: {record.Task}\n" +
-                            $"Длительность {record.Duration}"
-                    });
-                    response.EnsureSuccessStatusCode();
-                }
-
-                List<MyTask> tasks = MyTaskController.GetTasks();
-
-                foreach (var t in tasks)
-                {
-                    if (t.Id.Replace('-', '_') == update.message.text.Substring(7).Trim())
-                    {
-                        _tracker.Start(t.Id);
-                        var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
+                        if (_tracker.IsTracking)
                         {
-                            chat_id = update.message.chat.id,
-                            text = $"Отсчет пошел ({t.Id} - {t.Title})",
-                        });
-                        response.EnsureSuccessStatusCode();
+                            var record = _tracker.CurrentTimeTransaction;
+
+                            record.Start = newStartValue;
+                            record.Flush();
+
+                            var response = await httpClient.PostAsJsonAsync($"{API_URL}editMessageText", new
+                            {
+                                chat_id = update.callback_query.from.id,
+                                message_id = update.callback_query.message.message_id,
+                                text =
+                                    $"Таймер запущен в {record.Start}\n" +
+                                    $"Задача: {record.Task}\n" +
+                                    $"Длительность {record.Duration}",
+                                reply_markup = new
+                                {
+                                    inline_keyboard = new[]
+                                    {
+                                        new[]
+                                        {
+                                            new { text = "+5 минут", callback_data = $"ttx_set_start('{record.Start - TimeSpan.FromMinutes(5)}')" },
+                                            new { text = "-5 минут", callback_data = $"ttx_set_start('{record.Start + TimeSpan.FromMinutes(5)}')" }
+                                        }
+                                    }
+                                }
+                            });
+                            response.EnsureSuccessStatusCode();
+                            _tracker.UpdateTimeSheets();
+                        }
                     }
                 }
+                else return;
             }
-            else if (update.message.text.StartsWith("/begin"))
+            else if (update.message != null && update.message.text != null)
             {
-                _tracker.Start();
-                var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
-                {
-                    chat_id = update.message.chat.id,
-                    text = "Отсчет пошел",
-                });
-                response.EnsureSuccessStatusCode();
-            }
-            else if (update.message.text.StartsWith("/end"))
-            {
-                if (_tracker.IsTracking)
-                {
-                    var record = _tracker.CurrentTimeTransaction;
-                    record.StopNow();
-
-                    var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
-                    {
-                        chat_id = update.message.chat.id,
-                        text = 
-                            $"Таймер запущен в {record.Start}\n" +
-                            $"Остановлен в {record.Stop}\n" +
-                            $"Задача: {record.Task}\n" +
-                            $"Длительность {record.Duration}"
-                    });
-                    response.EnsureSuccessStatusCode();
-                }
-            }
-            else if (update.message.text.StartsWith("/status"))
-            {
-                if (!_tracker.IsTracking)
+                if (update.message.text.StartsWith("/start"))
                 {
                     var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
                     {
                         chat_id = update.message.chat.id,
-                        text = "Таймер остановлен",
-                    });
-                    response.EnsureSuccessStatusCode();
-                    _tracker.UpdateTimeSheets();
-                }
-                else
-                {
-                    var record = _tracker.CurrentTimeTransaction;
-                    var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
-                    {
-                        chat_id = update.message.chat.id,
-                        text = 
-                            $"Таймер запущен в {record.Start}\n" +
-                            $"Задача: {record.Task}\n" +
-                            $"Длительность {record.Duration}"
+                        text = "Привет от бота!",
                     });
                     response.EnsureSuccessStatusCode();
                 }
-            }
-            else
-            {
-                var rawFileName = $"{DateTime.Now:yyyyMMddHHmmss}.md";
-                var realtiveFileName = $"inbox/{rawFileName}";
-                var absoluteFileName = $"g:/My Drive/sync/MyInbox/{realtiveFileName}";
-                File.WriteAllText(absoluteFileName, update.message.text);
-
-                var append = $"* ![[{realtiveFileName}]]\n";
-
-                if (!_tracker.IsTracking)
+                else if (update.message.text.StartsWith("/inbox"))
                 {
+                    var rawFileName = $"{DateTime.Now:yyyyMMddHHmmss}.md";
+                    var realtiveFileName = $"inbox/{rawFileName}";
+                    var absoluteFileName = $"g:/Мой диск/sync/MyInbox/{realtiveFileName}";
+                    File.WriteAllText(absoluteFileName, update.message.text.Substring(6));
+
+                    var append = $"* ![[{realtiveFileName}]]\n";
 
                     rawFileName = $"INBOX.md";
                     realtiveFileName = $"{rawFileName}";
-                    absoluteFileName = $"g:/My Drive/sync/MyInbox/{realtiveFileName}";
+                    absoluteFileName = $"g:/Мой диск/sync/MyInbox/{realtiveFileName}";
                     File.AppendAllText(absoluteFileName, append);
 
                     var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
@@ -298,24 +203,199 @@ namespace MyInbox
                     });
                     response.EnsureSuccessStatusCode();
                 }
-                else
+                else if (update.message.text.StartsWith("/tasks"))
                 {
-                    var record = _tracker.CurrentTimeTransaction;
+                    StringBuilder msg = new StringBuilder();
+                    List<MyTask> tasks = MyTaskController.GetTasks();
 
-                    var rel = Path.GetDirectoryName(record.TaskPath);
-
-                    rawFileName = $"{record.Task}-ACTIVITY.md";
-                    realtiveFileName = $"{rel}/{rawFileName}";
-                    absoluteFileName = $"g:/My Drive/sync/MyInbox/{realtiveFileName}";
-                    absoluteFileName.EnsureDirectoryExists();
-                    File.AppendAllText(absoluteFileName, append);
+                    foreach (var task in tasks)
+                    {
+                        msg.Append($"* ({task.Status}) {task.Id}: {task.Title} /begin@{task.Id.Replace('-', '_')} /note@{task.Id.Replace('-', '_')}\n");
+                    }
 
                     var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
                     {
                         chat_id = update.message.chat.id,
-                        text = $"Заметка сохранена в {record.Task}-ACTIVITY",
+                        text = msg.ToString(),
                     });
                     response.EnsureSuccessStatusCode();
+                }
+                else if (update.message.text.StartsWith("/note@"))
+                {
+                    List<MyTask> tasks = MyTaskController.GetTasks();
+
+                    foreach (var t in tasks)
+                    {
+                        if (t.Id.Replace('-', '_') == update.message.text.Substring(6, update.message.text.IndexOf(' ') - 6).Trim())
+                        {
+                            var rawFileName = $"{DateTime.Now:yyyyMMddHHmmss}.md";
+                            var realtiveFileName = $"inbox/{rawFileName}";
+                            var absoluteFileName = $"g:/Мой диск/sync/MyInbox/{realtiveFileName}";
+                            File.WriteAllText(absoluteFileName, update.message.text.Substring(update.message.text.IndexOf(' ')).Trim());
+
+                            var append = $"* ![[{realtiveFileName}]]\n";
+
+                            var path = Path.GetDirectoryName(t.FileName);
+                            var p = Path.Combine(path, $"{t.Id}-ACTIVITY.md");
+
+                            p.EnsureDirectoryExists();
+                            File.AppendAllText(p, append);
+
+                            var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
+                            {
+                                chat_id = update.message.chat.id,
+                                text = $"Заметка сохранена в {t.Id}-ACTIVITY",
+                            });
+                            response.EnsureSuccessStatusCode();
+                        }
+                    }
+                }
+                else if (update.message.text.StartsWith("/begin@"))
+                {
+                    if (_tracker.IsTracking)
+                    {
+
+                        var record = _tracker.CurrentTimeTransaction;
+                        record.StopNow();
+
+                        var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
+                        {
+                            chat_id = update.message.chat.id,
+                            text =
+                                $"Таймер запущен в {record.Start}\n" +
+                                $"Остановлен в {record.Stop}\n" +
+                                $"Задача: {record.Task}\n" +
+                                $"Длительность {record.Duration}"
+                        });
+                        response.EnsureSuccessStatusCode();
+                    }
+
+                    List<MyTask> tasks = MyTaskController.GetTasks();
+
+                    foreach (var t in tasks)
+                    {
+                        if (t.Id.Replace('-', '_') == update.message.text.Substring(7).Trim())
+                        {
+                            _tracker.Start(t.Id);
+                            var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
+                            {
+                                chat_id = update.message.chat.id,
+                                text = $"Отсчет пошел ({t.Id} - {t.Title})",
+                            });
+                            response.EnsureSuccessStatusCode();
+                        }
+                    }
+                }
+                else if (update.message.text.StartsWith("/begin"))
+                {
+                    _tracker.Start();
+                    var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
+                    {
+                        chat_id = update.message.chat.id,
+                        text = "Отсчет пошел",
+                    });
+                    response.EnsureSuccessStatusCode();
+                }
+                else if (update.message.text.StartsWith("/end"))
+                {
+                    if (_tracker.IsTracking)
+                    {
+                        var record = _tracker.CurrentTimeTransaction;
+                        record.StopNow();
+
+                        var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
+                        {
+                            chat_id = update.message.chat.id,
+                            text =
+                                $"Таймер запущен в {record.Start}\n" +
+                                $"Остановлен в {record.Stop}\n" +
+                                $"Задача: {record.Task}\n" +
+                                $"Длительность {record.Duration}"
+                        });
+                        response.EnsureSuccessStatusCode();
+                    }
+                }
+                else if (update.message.text.StartsWith("/status"))
+                {
+                    if (!_tracker.IsTracking)
+                    {
+                        var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
+                        {
+                            chat_id = update.message.chat.id,
+                            text = "Таймер остановлен",
+                        });
+                        response.EnsureSuccessStatusCode();
+                        _tracker.UpdateTimeSheets();
+                    }
+                    else
+                    {
+                        var record = _tracker.CurrentTimeTransaction;
+                        var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
+                        {
+                            chat_id = update.message.chat.id,
+                            text =
+                                $"Таймер запущен в {record.Start}\n" +
+                                $"Задача: {record.Task}\n" +
+                                $"Длительность {record.Duration}",
+                            reply_markup = new
+                            {
+                                inline_keyboard = new[]
+                                {
+                                new[]
+                                {
+                                    new { text = "+5 минут", callback_data = $"ttx_set_start('{record.Start - TimeSpan.FromMinutes(5)}')" },
+                                    new { text = "-5 минут", callback_data = $"ttx_set_start('{record.Start + TimeSpan.FromMinutes(5)}')" }
+                                }
+                            }
+                            }
+                        });
+                        response.EnsureSuccessStatusCode();
+                        _tracker.UpdateTimeSheets();
+                    }
+                }
+                else
+                {
+                    var rawFileName = $"{DateTime.Now:yyyyMMddHHmmss}.md";
+                    var realtiveFileName = $"inbox/{rawFileName}";
+                    var absoluteFileName = $"g:/Мой диск/sync/MyInbox/{realtiveFileName}";
+                    File.WriteAllText(absoluteFileName, update.message.text);
+
+                    var append = $"* ![[{realtiveFileName}]]\n";
+
+                    if (!_tracker.IsTracking)
+                    {
+
+                        rawFileName = $"INBOX.md";
+                        realtiveFileName = $"{rawFileName}";
+                        absoluteFileName = $"g:/Мой диск/sync/MyInbox/{realtiveFileName}";
+                        File.AppendAllText(absoluteFileName, append);
+
+                        var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
+                        {
+                            chat_id = update.message.chat.id,
+                            text = "Заметка сохранена в INBOX",
+                        });
+                        response.EnsureSuccessStatusCode();
+                    }
+                    else
+                    {
+                        var record = _tracker.CurrentTimeTransaction;
+
+                        var rel = Path.GetDirectoryName(record.TaskPath);
+
+                        rawFileName = $"{record.Task}-ACTIVITY.md";
+                        realtiveFileName = $"{rel}/{rawFileName}";
+                        absoluteFileName = $"g:/Мой диск/sync/MyInbox/{realtiveFileName}";
+                        absoluteFileName.EnsureDirectoryExists();
+                        File.AppendAllText(absoluteFileName, append);
+
+                        var response = await httpClient.PostAsJsonAsync($"{API_URL}sendMessage", new
+                        {
+                            chat_id = update.message.chat.id,
+                            text = $"Заметка сохранена в {record.Task}-ACTIVITY",
+                        });
+                        response.EnsureSuccessStatusCode();
+                    }
                 }
             }
         }

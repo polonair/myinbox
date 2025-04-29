@@ -16,15 +16,16 @@ namespace MyInbox
         {
             get
             {
-                foreach(var file in Directory.EnumerateFiles("g:/My Drive/sync/MyInbox/", $"{Task}.md", SearchOption.AllDirectories))
+                foreach(var file in Directory.EnumerateFiles("g:/Мой диск/sync/MyInbox/", $"{Task}.md", SearchOption.AllDirectories))
                 {
-                    return Path.GetRelativePath("g:/My Drive/sync/MyInbox/", Path.GetFullPath(file));
+                    return Path.GetRelativePath("g:/Мой диск/sync/MyInbox/", Path.GetFullPath(file));
                 }
                 throw new FileNotFoundException();
             }
         }
 
         public string Note { get; private set; }
+        public List<string> Tags { get; private set; } = null;
 
         internal static bool IsTracking(string file)
         {
@@ -46,6 +47,7 @@ namespace MyInbox
             transaction.FileName = file;
             var content = File.ReadAllLines(file);
             int fmLimit = 2;
+            bool inTags = false;
             foreach (var line in content)
             {
                 if (line.Trim().StartsWith("---"))
@@ -56,11 +58,29 @@ namespace MyInbox
                 if (fmLimit > 0)
                 {
                     if (line.Trim().StartsWith("start:") && DateTime.TryParse(line.Substring(6), out DateTime start))
+                    {
+                        inTags = false;
                         transaction.Start = start;
+                    }
                     if (line.Trim().StartsWith("stop:") && DateTime.TryParse(line.Substring(5), out DateTime stop))
+                    {
+                        inTags = false;
                         transaction.Stop = stop;
+                    }
                     if (line.Trim().StartsWith("task:"))
+                    {
+                        inTags = false;
                         transaction.Task = line.Substring(5).Trim().Trim('\"').Trim('[', ']');
+                    }
+                    if (line.Trim().StartsWith("tags:"))
+                    {
+                        inTags = true;
+                        transaction.Tags = new List<string>();
+                    }
+                    if (line.Trim().StartsWith("- ") && inTags)
+                    {
+                        transaction.Tags.Add(line.TrimStart(' ', '-').Trim().Trim('\"').Trim('#'));
+                    }
                 }
                 else 
                 {
@@ -80,7 +100,7 @@ namespace MyInbox
             }.Flush();
         }
 
-        private void Flush()
+        public void Flush()
         {
 
             var lst = new List<string>
@@ -89,8 +109,10 @@ namespace MyInbox
                     $"start: {Start:s}",
                     $"stop: {((Stop<Start)?"":Stop.ToString("s"))}",
                     $"task: \"[[{Task}]]\"",
-                    $"---"
+                    $"tags: ",
             };
+            if (Tags != null) foreach (var item in Tags) lst.Add($"  - {item}");
+            lst.Add("---");
             if (!string.IsNullOrEmpty(this.Note)) lst.AddRange(this.Note.Split('\n'));
             File.WriteAllLines(FileName, lst);
         }
@@ -107,7 +129,7 @@ namespace MyInbox
         { 
             get
             {
-                string path = $"g:/My Drive/sync/MyInbox/ttx/";
+                string path = $"g:/Мой диск/sync/MyInbox/ttx/";
                 foreach (var file in Directory.EnumerateFiles(path, "*.md"))
                 {
                     if (TimeTransaction.IsTracking(file)) return true;
@@ -120,7 +142,7 @@ namespace MyInbox
         {
             get
             {
-                string path = $"g:/My Drive/sync/MyInbox/ttx/";
+                string path = $"g:/Мой диск/sync/MyInbox/ttx/";
                 foreach (var file in Directory.EnumerateFiles(path, "*.md"))
                 {
                     if (TimeTransaction.IsTracking(file))
@@ -133,7 +155,7 @@ namespace MyInbox
         }
         public void Start()
         {
-            string path = $"g:/My Drive/sync/MyInbox/ttx/ttx-{DateTime.Now:yyyyMMddHHmmss}.md";
+            string path = $"g:/Мой диск/sync/MyInbox/ttx/ttx-{DateTime.Now:yyyyMMddHHmmss}.md";
             TimeTransaction.CreateWithFile(path);
         }
         public async Task StartAsync(CancellationToken cancelationToken)
@@ -146,7 +168,7 @@ namespace MyInbox
 
         internal void Start(string id)
         {
-            string path = $"g:/My Drive/sync/MyInbox/ttx/ttx-{DateTime.Now:yyyyMMddHHmmss}.md";
+            string path = $"g:/Мой диск/sync/MyInbox/ttx/ttx-{DateTime.Now:yyyyMMddHHmmss}.md";
             TimeTransaction.CreateWithFile(path, id);
             UpdateTimeSheets();
         }
@@ -154,7 +176,7 @@ namespace MyInbox
         public void UpdateTimeSheets()
         {
 
-            string path = $"g:/My Drive/sync/MyInbox/";
+            string path = $"g:/Мой диск/sync/MyInbox/";
             foreach (var file in Directory.EnumerateFiles(path, "*.md", SearchOption.AllDirectories))
             {
                 if (File.ReadAllText(file).Contains("%%:TIMESHEET("))
@@ -167,7 +189,7 @@ namespace MyInbox
         private void UpdateTimeSheet(string file)
         {
             var content = File.ReadAllText(file);
-            var ms = Regex.Matches(content, "%%:TIMESHEET\\('([^']+)',\\s*'([^']*)',\\s*'([^']+)',\\s*'([^']+)'\\):%%.*%%:END:%%", RegexOptions.Singleline);
+            var ms = Regex.Matches(content, "%%:TIMESHEET\\('([^']+)',\\s*'([^']*)',\\s*'([^']+)',\\s*'([^']+)'\\):%%.*?%%:END:%%", RegexOptions.Singleline);
             foreach (Match m in ms)
             {
                 if (m.Success)
@@ -212,14 +234,19 @@ namespace MyInbox
             dt.Columns.Add("note", typeof(string));
             dt.Columns.Add("duaration", typeof(TimeSpan));
             dt.Columns.Add("started", typeof(DateTime));
-            string path = $"g:/My Drive/sync/MyInbox/ttx/";
+            string path = $"g:/Мой диск/sync/MyInbox/ttx/";
+            TimeSpan summ = TimeSpan.Zero;
             
             foreach (var file in Directory.EnumerateFiles(path, "*.md"))
             {
                 var ttx = TimeTransaction.FromFile(file);
-                if (from < ttx.Start && to > ttx.Start)
-                    dt.Rows.Add($"[[{ttx.Task}]]", ttx.Note, ttx.Duration, ttx.Start);
+                if (ttx.Tags.Contains(tag) && from < ttx.Start && to > ttx.Start)
+                {
+                    dt.Rows.Add($"[[{ttx.Task}]]", $"![[{Path.GetFileName(ttx.FileName)}]]", ttx.Duration, ttx.Start);
+                    summ += ttx.Duration;
+                }
             }
+            dt.Rows.Add($"Итог:", $"", summ, DateTime.Now);
 
             return dt.ToMarkdown();
         }
